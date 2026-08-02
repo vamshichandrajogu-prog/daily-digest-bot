@@ -131,7 +131,7 @@ def fetch_github_trending():
         if m in seen:
             continue
         seen.add(m)
-        repos.append({"name": m, "url": f"https://github.com/{m}"})
+        repos.append({"title": m, "url": f"https://github.com/{m}"})
         if len(repos) >= GITHUB_TRENDING_LIMIT:
             break
  
