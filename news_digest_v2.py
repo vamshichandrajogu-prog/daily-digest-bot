@@ -191,17 +191,34 @@ def build_raw_text_blob(raw):
     return "\n".join(lines)
  
  
-def build_links_appendix(raw):
-    """Keep the original links available as a reference block, separate from
-    the curated summary, so nothing is lost even if Gemini's write-up omits a link."""
-    lines = ["SOURCE LINKS (for reference)", "=" * 30]
+def build_top_links(raw, limit=5):
+    """Instead of dumping every link from every source, surface just the
+    highest-scored items (HN/Reddit have scores; GitHub/RSS don't, so they're
+    included at a flat baseline). Keeps the message short."""
+    all_items = []
     for source, (items, error) in raw.items():
         if error or not items:
             continue
-        lines.append(f"\n{source}:")
         for it in items:
-            if it.get("url"):
-                lines.append(f"  {it['title'][:70]} -> {it['url']}")
+            if not it.get("url"):
+                continue
+            all_items.append({
+                "title": it["title"],
+                "url": it["url"],
+                "score": it.get("score", 0),
+                "source": source,
+            })
+ 
+    all_items.sort(key=lambda x: x["score"], reverse=True)
+    top = all_items[:limit]
+ 
+    if not top:
+        return ""
+ 
+    lines = ["\nTOP LINKS"]
+    for it in top:
+        short_title = it["title"][:60] + ("..." if len(it["title"]) > 60 else "")
+        lines.append(f"- {short_title} ({it['source']})\n  {it['url']}")
     return "\n".join(lines)
  
  
@@ -212,21 +229,27 @@ def curate_with_gemini(raw_text, api_key):
 to know what actually matters today — not a dump of links.
  
 From the raw headlines and repo names below (pulled from Hacker News, Reddit,
-GitHub Trending, and AI news feeds), produce a concise briefing with these
-sections, but ONLY include a section if you have genuinely relevant items for it:
+GitHub Trending, and AI news feeds), produce a SHORT, SCANNABLE briefing with
+these sections, but ONLY include a section if you have genuinely relevant items:
  
-🚀 NEW LAUNCHES — new AI models, tools, or products that just shipped
-🏢 COMPANY NEWS — funding, acquisitions, shutdowns, major pivots
-🔥 TRENDING ON GITHUB — repos gaining fast traction and why they matter
-📰 OTHER NOTABLE STORIES — anything else genuinely significant
+NEW LAUNCHES — new AI models, tools, or products that just shipped
+COMPANY NEWS — funding, acquisitions, shutdowns, major pivots
+TRENDING ON GITHUB — repos gaining fast traction and why they matter
+OTHER NOTABLE STORIES — anything else genuinely significant
  
-Rules:
+STRICT rules:
+- Maximum 3 items per section. Pick only the most important ones — quality over
+  completeness.
+- One line per item: a short headline, a dash, then a 1-sentence "why it matters".
+- PLAIN TEXT ONLY. Do not use asterisks, markdown bold, hashtags, or any
+  formatting symbols — Telegram will display them as literal characters, not
+  formatting. Use section titles in plain capital letters as shown above.
 - Skip duplicate stories covering the same event.
 - Skip low-signal or purely speculative items.
-- One line per item: a short, punchy headline followed by a 1-sentence "why it matters".
 - If nothing qualifies for a section, omit that section entirely.
 - Do not invent stories that aren't in the raw data below.
-- Keep the whole briefing under 400 words.
+- The ENTIRE briefing must be under 200 words. This is a hard limit — be ruthless
+  about cutting less important items to stay under it.
  
 RAW DATA:
 {raw_text}
@@ -291,8 +314,8 @@ def main():
         # Fall back to sending raw data so the run isn't a total loss
         curated = "Curation step failed today — here's the raw feed instead:\n\n" + raw_text
  
-    links_appendix = build_links_appendix(raw)
-    final_message = f"BRIEFING — {today}\n{'=' * 30}\n\n{curated}\n\n{links_appendix}"
+    links_block = build_top_links(raw, limit=5)
+    final_message = f"BRIEFING - {today}\n{'=' * 30}\n\n{curated}\n{links_block}"
  
     print("\n=== FINAL MESSAGE ===")
     print(final_message)
