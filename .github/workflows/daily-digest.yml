@@ -2,8 +2,12 @@ name: Daily News Digest
  
 on:
   schedule:
-    # Runs at 7:00 AM IST (1:30 AM UTC). GitHub Actions cron is always UTC.
-    - cron: "30 1 * * *"
+    # Targets 6:30 AM IST (1:00 AM UTC). GitHub Actions cron is always UTC.
+    # Scheduled earlier than the actual 7 AM target as a buffer, since GitHub
+    # documents that scheduled workflows can be delayed (commonly 5-30 min,
+    # occasionally much longer) during periods of high load — there's no
+    # guaranteed exact-time SLA on cron triggers.
+    - cron: "0 1 * * *"
   workflow_dispatch: {}   # lets you trigger it manually from the Actions tab too
  
 jobs:
