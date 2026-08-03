@@ -34,7 +34,7 @@ HN_STORY_LIMIT = 12
 HN_MIN_SCORE = 40
 HN_MAX_AGE_HOURS = 30
  
-SUBREDDITS = ["LocalLLaMA", "MachineLearning", "artificial"]
+SUBREDDITS = ["LocalLLaMA", "MachineLearning", "artificial", "worldnews", "technology", "business"]
 REDDIT_POST_LIMIT = 5
 REDDIT_HEADERS = {"User-Agent": "daily-digest-script/2.0"}
  
@@ -176,7 +176,8 @@ def collect_raw_signals():
  
  
 def build_raw_text_blob(raw):
-    """Flatten everything into plain text for Gemini to read."""
+    """Flatten everything into plain text for Gemini to read. Each line includes
+    the URL inline so Gemini can copy the exact source link rather than guessing."""
     lines = []
     for source, (items, error) in raw.items():
         lines.append(f"### {source}")
@@ -186,7 +187,8 @@ def build_raw_text_blob(raw):
             lines.append("(no items)")
         else:
             for it in items:
-                lines.append(f"- {it['title']}")
+                url = it.get("url", "")
+                lines.append(f"- {it['title']} | {url}")
         lines.append("")
     return "\n".join(lines)
  
@@ -225,31 +227,43 @@ def build_top_links(raw, limit=5):
 def curate_with_gemini(raw_text, api_key):
     """Send the raw headline dump to Gemini and ask it to produce a categorized,
     breaking-news-style brief."""
-    prompt = f"""You are curating a daily tech/AI briefing for a developer who wants
-to know what actually matters today — not a dump of links.
+    prompt = f"""You are curating a daily "what's actually trending" briefing —
+a mix of AI/tech news AND general world/business news, not just AI.
  
-From the raw headlines and repo names below (pulled from Hacker News, Reddit,
-GitHub Trending, and AI news feeds), produce a SHORT, SCANNABLE briefing with
-these sections, but ONLY include a section if you have genuinely relevant items:
+Below is raw data pulled from Hacker News, several subreddits (both tech/AI
+ones and general ones like r/worldnews, r/technology, r/business), GitHub
+Trending, and AI news feeds. Each line has a title and its exact URL separated
+by " | ".
  
-NEW LAUNCHES — new AI models, tools, or products that just shipped
-COMPANY NEWS — funding, acquisitions, shutdowns, major pivots
-TRENDING ON GITHUB — repos gaining fast traction and why they matter
-OTHER NOTABLE STORIES — anything else genuinely significant
+Pick the 8 to 10 MOST significant, genuinely trending topics from across ALL
+of this raw data — mix AI/tech stories with general world/business/science
+stories. Do not over-index on AI just because some sources are AI-focused;
+give a balanced picture of what's actually significant today across domains.
+ 
+Output EXACTLY in this format, nothing else added before or after:
+ 
+Top Trending Topics
+ 
+[Topic Name]
+2-3 line plain-English explanation of what happened and why it's significant.
+Source: [exact URL from the raw data for this item]
+ 
+[Topic Name]
+2-3 line plain-English explanation of what happened and why it's significant.
+Source: [exact URL from the raw data for this item]
+ 
+(repeat for each topic)
  
 STRICT rules:
-- Maximum 3 items per section. Pick only the most important ones — quality over
-  completeness.
-- One line per item: a short headline, a dash, then a 1-sentence "why it matters".
-- PLAIN TEXT ONLY. Do not use asterisks, markdown bold, hashtags, or any
-  formatting symbols — Telegram will display them as literal characters, not
-  formatting. Use section titles in plain capital letters as shown above.
+- Use the EXACT URL from the raw data for each topic's Source line. Never
+  invent, guess, or modify a URL. If you can't find a clean URL for a topic,
+  skip that topic and pick a different one instead.
+- PLAIN TEXT ONLY — no asterisks, markdown bold, hashtags, or bullet symbols.
+  Telegram will display these as literal characters, not formatting.
 - Skip duplicate stories covering the same event.
-- Skip low-signal or purely speculative items.
-- If nothing qualifies for a section, omit that section entirely.
+- Skip low-signal, speculative, or purely promotional items.
 - Do not invent stories that aren't in the raw data below.
-- The ENTIRE briefing must be under 200 words. This is a hard limit — be ruthless
-  about cutting less important items to stay under it.
+- Leave one blank line between each topic entry.
  
 RAW DATA:
 {raw_text}
@@ -314,8 +328,8 @@ def main():
         # Fall back to sending raw data so the run isn't a total loss
         curated = "Curation step failed today — here's the raw feed instead:\n\n" + raw_text
  
-    links_block = build_top_links(raw, limit=5)
-    final_message = f"BRIEFING - {today}\n{'=' * 30}\n\n{curated}\n{links_block}"
+    links_block = build_top_links(raw, limit=5) if error else ""
+    final_message = f"{today}\n{'=' * 30}\n\n{curated}\n{links_block}"
  
     print("\n=== FINAL MESSAGE ===")
     print(final_message)
@@ -334,3 +348,7 @@ def main():
 if __name__ == "__main__":
     main()
  
+
+
+
+
