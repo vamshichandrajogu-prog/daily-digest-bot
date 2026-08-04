@@ -25,6 +25,7 @@ import time
 import os
 import sys
 import re
+import html
 import xml.etree.ElementTree as ET
  
 # ---------- Config ----------
@@ -235,35 +236,30 @@ ones and general ones like r/worldnews, r/technology, r/business), GitHub
 Trending, and AI news feeds. Each line has a title and its exact URL separated
 by " | ".
  
-Pick the 8 to 10 MOST significant, genuinely trending topics from across ALL
+Pick the 7 to 9 MOST significant, genuinely trending topics from across ALL
 of this raw data — mix AI/tech stories with general world/business/science
 stories. Do not over-index on AI just because some sources are AI-focused;
 give a balanced picture of what's actually significant today across domains.
  
-Output EXACTLY in this format, nothing else added before or after:
+Output EACH topic using EXACTLY this structure (including the tags TOPIC/INFO/SOURCE
+literally as shown), one block per topic, with a blank line between blocks:
  
-Top Trending Topics
- 
-[Topic Name]
-2-3 line plain-English explanation of what happened and why it's significant.
-Source: [exact URL from the raw data for this item]
- 
-[Topic Name]
-2-3 line plain-English explanation of what happened and why it's significant.
-Source: [exact URL from the raw data for this item]
- 
-(repeat for each topic)
+TOPIC: <short topic name, 5-8 words max>
+INFO: <ONE tight sentence, max 20 words, explaining what happened and why it matters>
+SOURCE: <exact URL from the raw data for this item>
  
 STRICT rules:
-- Use the EXACT URL from the raw data for each topic's Source line. Never
+- INFO must be exactly ONE sentence, maximum 20 words. Do not write 2-3 sentences.
+  Be ruthless about cutting to the single most important fact.
+- Use the EXACT URL from the raw data for each topic's SOURCE line. Never
   invent, guess, or modify a URL. If you can't find a clean URL for a topic,
   skip that topic and pick a different one instead.
-- PLAIN TEXT ONLY — no asterisks, markdown bold, hashtags, or bullet symbols.
-  Telegram will display these as literal characters, not formatting.
+- PLAIN TEXT ONLY inside TOPIC and INFO — no asterisks, markdown, hashtags, or
+  bullet symbols.
 - Skip duplicate stories covering the same event.
 - Skip low-signal, speculative, or purely promotional items.
 - Do not invent stories that aren't in the raw data below.
-- Leave one blank line between each topic entry.
+- Output ONLY the TOPIC/INFO/SOURCE blocks — no extra headers, intro, or closing text.
  
 RAW DATA:
 {raw_text}
@@ -293,7 +289,42 @@ RAW DATA:
         return None, f"Gemini API call failed: {e}"
  
  
-def send_telegram_message(text, bot_token, chat_id):
+def format_as_telegram_html(curated_text, date_str):
+    """Parse Gemini's TOPIC/INFO/SOURCE blocks and turn them into Telegram HTML,
+    with topic names actually bold (using Telegram's <b> tag, which is far more
+    forgiving than Markdown mode — it only needs &, <, > escaped)."""
+    blocks = re.split(r"\n\s*\n", curated_text.strip())
+    parts = [f"<b>{html.escape(date_str)}</b>", ""]
+ 
+    parsed_any = False
+    for block in blocks:
+        topic_match = re.search(r"TOPIC:\s*(.+)", block)
+        info_match = re.search(r"INFO:\s*(.+)", block)
+        source_match = re.search(r"SOURCE:\s*(\S+)", block)
+ 
+        if not (topic_match and info_match):
+            continue  # skip malformed blocks rather than crash the whole send
+ 
+        parsed_any = True
+        topic = html.escape(topic_match.group(1).strip())
+        info = html.escape(info_match.group(1).strip())
+        parts.append(f"<b>{topic}</b>")
+        parts.append(info)
+        if source_match:
+            # Plain URL text - Telegram auto-links bare URLs regardless of parse_mode,
+            # no need for an <a> tag.
+            parts.append(f"Source: {source_match.group(1).strip()}")
+        parts.append("")
+ 
+    if not parsed_any:
+        # Gemini didn't follow the structured format - fall back to raw text so
+        # the run isn't wasted, just less pretty.
+        parts.append(html.escape(curated_text))
+ 
+    return "\n".join(parts)
+ 
+ 
+def send_telegram_message(text, bot_token, chat_id, use_html=False):
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     chunk_size = 4000
  
@@ -304,6 +335,8 @@ def send_telegram_message(text, bot_token, chat_id):
             "text": chunk,
             "disable_web_page_preview": True,
         }
+        if use_html:
+            payload["parse_mode"] = "HTML"
         resp = requests.post(url, data=payload, timeout=10)
         if not resp.ok:
             print(f"Telegram send failed: {resp.status_code} {resp.text}", file=sys.stderr)
@@ -325,11 +358,16 @@ def main():
     curated, error = curate_with_gemini(raw_text, gemini_key)
     if error:
         print(f"Curation failed: {error}", file=sys.stderr)
-        # Fall back to sending raw data so the run isn't a total loss
-        curated = "Curation step failed today — here's the raw feed instead:\n\n" + raw_text
- 
-    links_block = build_top_links(raw, limit=5) if error else ""
-    final_message = f"{today}\n{'=' * 30}\n\n{curated}\n{links_block}"
+        # Fall back to sending raw data so the run isn't a total loss. Plain
+        # text here (not HTML) since raw scraped titles may contain characters
+        # that aren't valid/escaped HTML.
+        fallback_text = "Curation step failed today — here's the raw feed instead:\n\n" + raw_text
+        links_block = build_top_links(raw, limit=5)
+        final_message = f"{today}\n{'=' * 30}\n\n{fallback_text}\n{links_block}"
+        use_html = False
+    else:
+        final_message = format_as_telegram_html(curated, today)
+        use_html = True
  
     print("\n=== FINAL MESSAGE ===")
     print(final_message)
@@ -341,14 +379,10 @@ def main():
         print("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set — skipping send.", file=sys.stderr)
         return
  
-    send_telegram_message(final_message, bot_token, chat_id)
+    send_telegram_message(final_message, bot_token, chat_id, use_html=use_html)
     print("\nBriefing sent to Telegram.")
  
  
 if __name__ == "__main__":
     main()
  
-
-
-
-
