@@ -26,6 +26,8 @@ import os
 import sys
 import re
 import html
+import urllib.parse
+from email.utils import parsedate_to_datetime
 import xml.etree.ElementTree as ET
  
 # ---------- Config ----------
@@ -47,6 +49,17 @@ RSS_FEEDS = {
     "VentureBeat AI": "https://venturebeat.com/category/ai/feed/",
 }
 RSS_ITEM_LIMIT = 8
+RSS_MAX_AGE_HOURS = 48  # discard articles older than this even if a feed serves them
+ 
+# Google News RSS search supports a "when:1d" operator that filters results to
+# the last 24 hours server-side - this is the main fix for stale/old articles
+# slipping through, since Google enforces the date filter itself rather than
+# us trusting whatever a feed happens to be serving.
+GOOGLE_NEWS_QUERIES = {
+    "Google News - AI/Tech": "artificial intelligence OR tech launch when:1d",
+    "Google News - World/Business": "world news OR business when:1d",
+}
+GOOGLE_NEWS_ITEM_LIMIT = 8
  
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
@@ -150,8 +163,65 @@ def fetch_rss(name, url):
     except Exception as e:
         return [], f"Could not reach {name} feed: {e}"
  
+    now = datetime.datetime.now(datetime.timezone.utc)
     items = []
-    for item in root.findall(".//item")[:RSS_ITEM_LIMIT]:
+    skipped_old = 0
+ 
+    for item in root.findall(".//item")[:RSS_ITEM_LIMIT * 2]:  # scan a few extra since some get filtered by age
+        title_el = item.find("title")
+        link_el = item.find("link")
+        pubdate_el = item.find("pubDate")
+ 
+        if title_el is None or not title_el.text:
+            continue
+ 
+        # Actually check the article's age instead of trusting feed order.
+        # This is the fix for old/stale articles slipping through as "today's news".
+        if pubdate_el is not None and pubdate_el.text:
+            try:
+                pub_dt = parsedate_to_datetime(pubdate_el.text)
+                if pub_dt.tzinfo is None:
+                    pub_dt = pub_dt.replace(tzinfo=datetime.timezone.utc)
+                age_hours = (now - pub_dt).total_seconds() / 3600
+                if age_hours > RSS_MAX_AGE_HOURS:
+                    skipped_old += 1
+                    continue
+            except Exception:
+                pass  # if we can't parse the date, don't block the item on that alone
+ 
+        items.append({
+            "title": title_el.text.strip(),
+            "url": link_el.text.strip() if link_el is not None and link_el.text else "",
+        })
+ 
+        if len(items) >= RSS_ITEM_LIMIT:
+            break
+ 
+    error = None
+    if not items and skipped_old > 0:
+        error = f"All {skipped_old} items from {name} were older than {RSS_MAX_AGE_HOURS}h - feed may be stale."
+ 
+    return items, error
+ 
+ 
+def fetch_google_news(label, query):
+    """Google News RSS search with a built-in when:1d filter - Google enforces
+    the recency window server-side, which is more reliable than us guessing
+    from feed order. Unofficial endpoint (no public API docs from Google), so
+    treat as best-effort rather than a guaranteed-stable API."""
+    base_url = "https://news.google.com/rss/search"
+    params = {"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"}
+    full_url = f"{base_url}?{urllib.parse.urlencode(params)}"
+ 
+    try:
+        resp = requests.get(full_url, headers={"User-Agent": "daily-digest-script/2.0"}, timeout=10)
+        resp.raise_for_status()
+        root = ET.fromstring(resp.content)
+    except Exception as e:
+        return [], f"Could not reach Google News ({label}): {e}"
+ 
+    items = []
+    for item in root.findall(".//item")[:GOOGLE_NEWS_ITEM_LIMIT]:
         title_el = item.find("title")
         link_el = item.find("link")
         if title_el is not None and title_el.text:
@@ -172,6 +242,8 @@ def collect_raw_signals():
     raw["GitHub Trending"] = fetch_github_trending()
     for name, url in RSS_FEEDS.items():
         raw[name] = fetch_rss(name, url)
+    for label, query in GOOGLE_NEWS_QUERIES.items():
+        raw[label] = fetch_google_news(label, query)
  
     return raw
  
@@ -249,6 +321,10 @@ INFO: <ONE tight sentence, max 20 words, explaining what happened and why it mat
 SOURCE: <exact URL from the raw data for this item>
  
 STRICT rules:
+- Prioritize items that read as genuinely NEW today - a fresh announcement,
+  launch, or event. If a headline describes something that sounds like it may
+  have happened a while ago (e.g. phrased as an established fact rather than
+  a new development), deprioritize it in favor of clearly fresh items.
 - INFO must be exactly ONE sentence, maximum 20 words. Do not write 2-3 sentences.
   Be ruthless about cutting to the single most important fact.
 - Use the EXACT URL from the raw data for each topic's SOURCE line. Never
