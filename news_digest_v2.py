@@ -365,6 +365,25 @@ RAW DATA:
         return None, f"Gemini API call failed: {e}"
  
  
+def shorten_url(url):
+    """Shorten a URL using TinyURL's free create API - no API key required.
+    If shortening fails for any reason, fall back to the original URL so a
+    slow/unavailable shortener never breaks message delivery."""
+    if not url:
+        return url
+    try:
+        resp = requests.get(
+            "https://tinyurl.com/api-create.php",
+            params={"url": url},
+            timeout=8,
+        )
+        if resp.ok and resp.text.startswith("http"):
+            return resp.text.strip()
+    except Exception:
+        pass
+    return url  # fallback: original (long) URL rather than failing the run
+ 
+ 
 def format_as_telegram_html(curated_text, date_str):
     """Parse Gemini's TOPIC/INFO/SOURCE blocks and turn them into Telegram HTML,
     with topic names actually bold (using Telegram's <b> tag, which is far more
@@ -387,9 +406,10 @@ def format_as_telegram_html(curated_text, date_str):
         parts.append(f"<b>{topic}</b>")
         parts.append(info)
         if source_match:
+            short_url = shorten_url(source_match.group(1).strip())
             # Plain URL text - Telegram auto-links bare URLs regardless of parse_mode,
             # no need for an <a> tag.
-            parts.append(f"Source: {source_match.group(1).strip()}")
+            parts.append(f"Source: {short_url}")
         parts.append("")
  
     if not parsed_any:
