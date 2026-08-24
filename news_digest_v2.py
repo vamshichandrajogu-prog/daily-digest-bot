@@ -37,7 +37,7 @@ HN_STORY_LIMIT = 12
 HN_MIN_SCORE = 40
 HN_MAX_AGE_HOURS = 30
  
-SUBREDDITS = ["LocalLLaMA", "MachineLearning", "artificial", "worldnews", "technology", "business"]
+SUBREDDITS = ["LocalLLaMA", "MachineLearning", "artificial", "worldnews", "technology", "india"]
 REDDIT_POST_LIMIT = 5
 REDDIT_HEADERS = {"User-Agent": "daily-digest-script/2.0"}
  
@@ -57,7 +57,8 @@ RSS_MAX_AGE_HOURS = 48  # discard articles older than this even if a feed serves
 # us trusting whatever a feed happens to be serving.
 GOOGLE_NEWS_QUERIES = {
     "Google News - AI/Tech": "artificial intelligence OR tech launch when:1d",
-    "Google News - World/Business": "world news OR business when:1d",
+    "Google News - World": "world news when:1d",
+    "Google News - India": "India when:1d",
 }
 GOOGLE_NEWS_ITEM_LIMIT = 8
  
@@ -298,24 +299,37 @@ def build_top_links(raw, limit=5):
  
  
 def curate_with_gemini(raw_text, api_key):
-    """Send the raw headline dump to Gemini and ask it to produce a categorized,
-    breaking-news-style brief."""
-    prompt = f"""You are curating a daily "what's actually trending" briefing —
-a mix of AI/tech news AND general world/business news, not just AI.
+    """Send the raw headline dump to Gemini and ask it to produce a categorized
+    briefing with a fixed mix: AI/tech, world news, India-specific news, and
+    trending GitHub repos."""
+    prompt = f"""You are curating a daily briefing with a SPECIFIC required mix
+of categories - not a free-for-all. Follow the quotas below exactly.
  
-Below is raw data pulled from Hacker News, several subreddits (both tech/AI
-ones and general ones like r/worldnews, r/technology, r/business), GitHub
-Trending, and AI news feeds. Each line has a title and its exact URL separated
-by " | ".
+Below is raw data pulled from Hacker News, several subreddits (tech/AI ones
+and general ones like r/worldnews, r/technology, r/india), GitHub Trending,
+and Google News searches (including an India-specific search and a world-news
+search). Each line has a title and its exact URL separated by " | ".
  
-Pick the 7 to 9 MOST significant, genuinely trending topics from across ALL
-of this raw data — mix AI/tech stories with general world/business/science
-stories. Do not over-index on AI just because some sources are AI-focused;
-give a balanced picture of what's actually significant today across domains.
+REQUIRED MIX (pick exactly within these ranges - do not skew the balance):
+- 3 to 4 items tagged CATEGORY: AI — significant AI/tech news (new models,
+  launches, funding, major AI company news).
+- 2 to 3 items tagged CATEGORY: WORLD — significant news from around the
+  world (not India-specific, not AI-specific) — aim for a mix of different
+  countries/regions where possible, not all from one country.
+- 1 to 2 items tagged CATEGORY: INDIA — hot topics specifically relevant to
+  India today (politics, economy, major events, business).
+- 1 to 2 items tagged CATEGORY: GITHUB — trending GitHub repos, pulled only
+  from the "GitHub Trending" source data below.
  
-Output EACH topic using EXACTLY this structure (including the tags TOPIC/INFO/SOURCE
-literally as shown), one block per topic, with a blank line between blocks:
+If there isn't enough raw data to fill a category within its range, include
+as many genuinely relevant items as you have rather than forcing irrelevant
+ones in - but try to hit the minimum wherever the raw data allows it.
  
+Output EACH topic using EXACTLY this structure (including the tags
+CATEGORY/TOPIC/INFO/SOURCE literally as shown), one block per topic, with a
+blank line between blocks:
+ 
+CATEGORY: <AI, WORLD, INDIA, or GITHUB — exactly one of these four words>
 TOPIC: <short topic name, 5-8 words max>
 INFO: <ONE tight sentence, max 20 words, explaining what happened and why it matters>
 SOURCE: <exact URL from the raw data for this item>
@@ -323,10 +337,9 @@ SOURCE: <exact URL from the raw data for this item>
 STRICT rules:
 - Prioritize items that read as genuinely NEW today - a fresh announcement,
   launch, or event. If a headline describes something that sounds like it may
-  have happened a while ago (e.g. phrased as an established fact rather than
-  a new development), deprioritize it in favor of clearly fresh items.
-- INFO must be exactly ONE sentence, maximum 20 words. Do not write 2-3 sentences.
-  Be ruthless about cutting to the single most important fact.
+  have happened a while ago, deprioritize it in favor of clearly fresh items.
+- INFO must be exactly ONE sentence, maximum 20 words. Be ruthless about
+  cutting to the single most important fact.
 - Use the EXACT URL from the raw data for each topic's SOURCE line. Never
   invent, guess, or modify a URL. If you can't find a clean URL for a topic,
   skip that topic and pick a different one instead.
@@ -335,7 +348,8 @@ STRICT rules:
 - Skip duplicate stories covering the same event.
 - Skip low-signal, speculative, or purely promotional items.
 - Do not invent stories that aren't in the raw data below.
-- Output ONLY the TOPIC/INFO/SOURCE blocks — no extra headers, intro, or closing text.
+- Output ONLY the CATEGORY/TOPIC/INFO/SOURCE blocks — no extra headers, intro,
+  or closing text.
  
 RAW DATA:
 {raw_text}
@@ -365,11 +379,18 @@ RAW DATA:
         return None, f"Gemini API call failed: {e}"
  
  
+# Only shorten URLs longer than this - short links (like github.com/user/repo)
+# already display fine on one line, no need to burn a shortener call on them.
+URL_SHORTEN_THRESHOLD = 60
+ 
+ 
 def shorten_url(url):
     """Shorten a URL using TinyURL's free create API - no API key required.
-    If shortening fails for any reason, fall back to the original URL so a
+    Only bothers shortening if the URL is long enough to actually wrap across
+    multiple lines on a phone screen; short links are left as-is. If
+    shortening fails for any reason, fall back to the original URL so a
     slow/unavailable shortener never breaks message delivery."""
-    if not url:
+    if not url or len(url) <= URL_SHORTEN_THRESHOLD:
         return url
     try:
         resp = requests.get(
@@ -384,15 +405,27 @@ def shorten_url(url):
     return url  # fallback: original (long) URL rather than failing the run
  
  
-def format_as_telegram_html(curated_text, date_str):
-    """Parse Gemini's TOPIC/INFO/SOURCE blocks and turn them into Telegram HTML,
-    with topic names actually bold (using Telegram's <b> tag, which is far more
-    forgiving than Markdown mode — it only needs &, <, > escaped)."""
-    blocks = re.split(r"\n\s*\n", curated_text.strip())
-    parts = [f"<b>{html.escape(date_str)}</b>", ""]
+CATEGORY_CONFIG = [
+    # (tag, section header, max items to actually show even if Gemini over-delivers)
+    ("AI", "AI & TECH", 4),
+    ("WORLD", "AROUND THE WORLD", 3),
+    ("INDIA", "INDIA", 2),
+    ("GITHUB", "TRENDING ON GITHUB", 2),
+]
  
+ 
+def format_as_telegram_html(curated_text, date_str):
+    """Parse Gemini's CATEGORY/TOPIC/INFO/SOURCE blocks, group them under
+    section headers in a fixed order, and turn them into Telegram HTML with
+    real bold formatting (Telegram's <b> tag only needs &, <, > escaped,
+    unlike Markdown mode which breaks on many ordinary punctuation marks)."""
+    blocks = re.split(r"\n\s*\n", curated_text.strip())
+ 
+    grouped = {tag: [] for tag, _, _ in CATEGORY_CONFIG}
     parsed_any = False
+ 
     for block in blocks:
+        category_match = re.search(r"CATEGORY:\s*(\w+)", block)
         topic_match = re.search(r"TOPIC:\s*(.+)", block)
         info_match = re.search(r"INFO:\s*(.+)", block)
         source_match = re.search(r"SOURCE:\s*(\S+)", block)
@@ -400,17 +433,33 @@ def format_as_telegram_html(curated_text, date_str):
         if not (topic_match and info_match):
             continue  # skip malformed blocks rather than crash the whole send
  
+        category = category_match.group(1).strip().upper() if category_match else None
+        if category not in grouped:
+            continue  # unrecognized/missing category tag - skip rather than misplace it
+ 
         parsed_any = True
-        topic = html.escape(topic_match.group(1).strip())
-        info = html.escape(info_match.group(1).strip())
-        parts.append(f"<b>{topic}</b>")
-        parts.append(info)
-        if source_match:
-            short_url = shorten_url(source_match.group(1).strip())
-            # Plain URL text - Telegram auto-links bare URLs regardless of parse_mode,
-            # no need for an <a> tag.
-            parts.append(f"Source: {short_url}")
-        parts.append("")
+        grouped[category].append({
+            "topic": topic_match.group(1).strip(),
+            "info": info_match.group(1).strip(),
+            "source": source_match.group(1).strip() if source_match else None,
+        })
+ 
+    parts = [f"<b>{html.escape(date_str)}</b>", ""]
+ 
+    for tag, header, max_items in CATEGORY_CONFIG:
+        items = grouped[tag][:max_items]  # hard cap as a safety net regardless of what Gemini sent
+        if not items:
+            continue
+        parts.append(f"<b>{html.escape(header)}</b>")
+        for it in items:
+            parts.append(f"<b>{html.escape(it['topic'])}</b>")
+            parts.append(html.escape(it["info"]))
+            if it["source"]:
+                short_url = shorten_url(it["source"])
+                # Plain URL text - Telegram auto-links bare URLs regardless of
+                # parse_mode, no need for an <a> tag.
+                parts.append(f"Source: {short_url}")
+            parts.append("")
  
     if not parsed_any:
         # Gemini didn't follow the structured format - fall back to raw text so
