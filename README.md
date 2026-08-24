@@ -1,163 +1,79 @@
-# Daily Digest Bot — Harry
+# Daily Digest Bot
 
-An automated daily briefing delivered straight to Telegram — no local server,
-no laptop load, runs entirely on GitHub's free infrastructure.
+An automated daily news briefing delivered straight to Telegram — no server,
+no local machine, no manual work. Runs entirely on GitHub Actions' free tier
+and sends a categorized digest via a Telegram bot each morning.
 
-Every morning, this pulls trending signals from Hacker News, Reddit, GitHub
-Trending, and Google News, curates them into a short, categorized briefing
-using Gemini, and sends it to a Telegram bot ("Harry").
+## What it does
 
----
+Every day, this pulls raw signals from several free sources, sends them to
+Gemini for curation into a short, categorized briefing, and delivers it to
+your phone via Telegram — automatically, on a schedule.
 
-## What you get
+**Sources pulled:**
+- Hacker News (top stories from the last ~24h)
+- Reddit: r/LocalLLaMA, r/MachineLearning, r/artificial, r/worldnews, r/technology, r/india
+- GitHub Trending (scraped)
+- Google News RSS search (with a built-in `when:1d` filter for AI/tech, world, and India-specific news)
 
-A message like this, delivered daily:
+**Output format:** a fixed mix, grouped into sections:
+- 3–4 AI & Tech items
+- 2–3 World news items (spread across regions, not just one country)
+- 1–2 India-specific items
+- 1–2 Trending GitHub repos
 
-```
-2026-08-17
-
-AI & TECH
-Stripe acquires AI startup OpenRouter
-Stripe reportedly agrees to acquire AI gateway startup OpenRouter for over $7 billion.
-Source: https://tinyurl.com/...
-
-AROUND THE WORLD
-EU plans new Russia sanctions package
-The EU foreign chief announced plans for the most far-reaching sanctions package against Russia this autumn.
-Source: https://tinyurl.com/...
-
-INDIA
-[India-specific hot topic]
-...
-
-TRENDING ON GITHUB
-[Trending repo]
-...
-```
-
-**Content mix per day:**
-- 3-4 AI/tech stories
-- 2-3 world news stories (spread across regions, not just one country)
-- 1-2 India-specific stories
-- 1-2 trending GitHub repos
-
----
-
-## How it works
-
-```
-GitHub Actions (daily cron)
-        │
-        ▼
-news_digest_v2.py
-        │
-        ├── Hacker News API (top stories, last ~24h)
-        ├── Reddit JSON API (top of day: LocalLLaMA, MachineLearning,
-        │     artificial, worldnews, technology, india)
-        ├── GitHub Trending (scraped)
-        └── Google News RSS (when:1d filter — AI/Tech, World, India)
-                │
-                ▼
-        Gemini API — curates raw headlines into a categorized,
-        one-sentence-per-item briefing (strict CATEGORY/TOPIC/
-        INFO/SOURCE format, parsed back into Python)
-                │
-                ▼
-        TinyURL — shortens any link over 60 characters
-                │
-                ▼
-        Telegram Bot API — sends the final briefing (HTML formatting,
-        real bold section headers and topic names)
-```
-
-Everything runs on GitHub's servers on a schedule. Nothing runs on your own
-machine.
-
----
+Each item is a bold topic name, one short sentence of context, and a source
+link (auto-shortened via TinyURL if it's long enough to wrap across multiple
+lines on a phone screen).
 
 ## Files in this repo
 
 | File | Purpose |
 |---|---|
-| `news_digest_v2.py` | The main script — fetches, curates, formats, and sends the digest |
-| `.github/workflows/daily-digest.yml` | GitHub Actions workflow that runs the script on a daily schedule |
-| `README.md` | This file |
-
----
+| `news_digest_v2.py` | The main script — fetches, curates, and sends the digest |
+| `.github/workflows/daily-digest.yml` | GitHub Actions workflow that runs the script on a schedule |
 
 ## Setup
 
 ### 1. Create a Telegram bot
-1. Message **@BotFather** on Telegram
-2. Send `/newbot`, follow the prompts, and save the **bot token** it gives you
-3. Send any message to your new bot, then visit
-   `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates` in a browser to find
-   your **chat ID** (look for `"chat":{"id":XXXXXXXXX`)
+1. Open Telegram, message **@BotFather**
+2. Send `/newbot`, follow the prompts to name it and give it a username
+3. Save the **bot token** BotFather gives you
 
-### 2. Get a Gemini API key
-Get a free key at [aistudio.google.com](https://aistudio.google.com) or
-[console.cloud.google.com](https://console.cloud.google.com) (Gemini API).
+### 2. Get your Telegram chat ID
+1. Send any message to your new bot
+2. Open `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates` in a browser
+3. Find `"chat":{"id":XXXXXXXXX,...}` in the response — that number is your chat ID
 
-### 3. Add repository secrets
-In this repo: **Settings → Secrets and variables → Actions → New repository secret**
+### 3. Get a Gemini API key
+Go to [aistudio.google.com](https://aistudio.google.com) (or [console.cloud.google.com](https://console.cloud.google.com) if you already use Google Cloud) and generate an API key. Gemini has a free tier suitable for this use case.
 
-Add all three:
-| Secret name | Value |
-|---|---|
-| `GEMINI_API_KEY` | Your Gemini API key |
-| `TELEGRAM_BOT_TOKEN` | Your bot token from BotFather |
-| `TELEGRAM_CHAT_ID` | Your chat ID from the getUpdates step |
+### 4. Add repo secrets
+In this repo: **Settings → Secrets and variables → Actions → New repository secret**. Add all three:
+- `GEMINI_API_KEY`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
 
-### 4. Test it
-Go to **Actions → Daily News Digest → Run workflow** to trigger it manually.
-Check Telegram — you should get a message within about a minute.
+### 5. Test it
+Go to the **Actions** tab → select the workflow → **Run workflow** to trigger it manually. Check Telegram for the result.
 
-Once confirmed working, it runs automatically on the schedule set in
-`daily-digest.yml` (no further action needed).
+## Customization
 
----
-
-## Customizing
-
-**Change the schedule:** edit the `cron:` line in
-`.github/workflows/daily-digest.yml`. GitHub Actions cron times are in UTC —
-convert your target local time accordingly. Scheduled workflows can run
-5-30+ minutes late during high load, so schedule a buffer before your actual
-target time.
-
-**Change the topic mix:** edit `CATEGORY_CONFIG` and the quota instructions
-inside the `curate_with_gemini()` prompt in `news_digest_v2.py`.
-
-**Change sources:** edit `SUBREDDITS`, `GOOGLE_NEWS_QUERIES`, or `RSS_FEEDS`
-near the top of `news_digest_v2.py`.
-
-**Change link-shortening threshold:** adjust `URL_SHORTEN_THRESHOLD` (default
-60 characters — links shorter than this are left as-is).
-
----
+- **Change the schedule**: edit the `cron` line in `daily-digest.yml`. GitHub Actions cron runs in UTC, and scheduled runs can be delayed (occasionally by hours during high load), so schedule earlier than your actual target time as a buffer.
+- **Change the category mix**: edit the quotas in the prompt inside `curate_with_gemini()`, and update `CATEGORY_CONFIG` in `format_as_telegram_html()` to match (both need to agree, or items may get dropped by the hard-cap safety net).
+- **Change sources**: edit `SUBREDDITS`, `GOOGLE_NEWS_QUERIES`, or `RSS_FEEDS` near the top of the script.
+- **Change item length/tone**: edit the prompt text in `curate_with_gemini()`.
 
 ## Known limitations
 
-- **GitHub Trending scraping is fragile.** It's HTML pattern-matching, not an
-  official API — if GitHub changes their page structure, this source may
-  silently return nothing (it's built to fail gracefully, not crash the run).
-- **Google News RSS is an unofficial endpoint.** It's widely used and stable
-  in practice, but not a documented/guaranteed-stable Google API.
-- **GitHub Actions scheduled runs aren't exact-time.** Expect some daily
-  variance in delivery time.
-- **This is a personal-use pipeline**, built from free/unofficial sources
-  stitched together — not hardened for production or public redistribution.
+- **GitHub Trending is scraped, not an official API.** It's pattern-matching GitHub's current page HTML, so it's the piece most likely to silently break if GitHub changes their page structure. It's built to fail gracefully rather than crash the whole run.
+- **Google News RSS search is an unofficial endpoint.** It's widely used and currently reliable, but not a documented, guaranteed-stable Google API.
+- **This is a personal-use tool, not hardened for production.** It's built from free/best-effort sources stitched together — good for a daily briefing, not something to build a product on without more error handling and monitoring.
+- **LLM curation isn't perfectly deterministic.** Gemini is instructed to follow strict formatting and category quotas, but occasional drift (e.g. one category short by an item) is possible and expected — the script has fallbacks so a formatting slip won't break delivery, it just won't look as polished that day.
 
----
+## Cost
 
-## Troubleshooting
-
-Check **Actions → (latest run) → send-digest** for logs. Common issues:
-
-- **Exit code 1 / KeyError**: usually a schema mismatch between sources (all
-  item dicts should use the same key names, e.g. `title`, not `name`).
-- **No Telegram message received but run succeeded**: double-check
-  `TELEGRAM_CHAT_ID` and `TELEGRAM_BOT_TOKEN` secrets are correct and that
-  you've sent at least one message to the bot first.
-- **Curation failed / Gemini error**: check `GEMINI_API_KEY` is valid and has
-  remaining quota.
+- **GitHub Actions**: free tier covers this easily — the job runs for well under a minute a day.
+- **Gemini API**: free tier is generally sufficient for a single small summarization call per day.
+- **Telegram Bot API**: free.
+- **TinyURL**: free, no key required.
