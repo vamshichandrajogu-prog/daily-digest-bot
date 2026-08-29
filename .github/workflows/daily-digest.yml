@@ -1,34 +1,31 @@
 name: Daily News Digest
- 
+
 on:
   schedule:
-    # Targets 6:30 AM IST (1:00 AM UTC). GitHub Actions cron is always UTC.
-    # Scheduled earlier than the actual 7 AM target as a buffer, since GitHub
-    # documents that scheduled workflows can be delayed (commonly 5-30 min,
-    # occasionally much longer) during periods of high load — there's no
-    # guaranteed exact-time SLA on cron triggers.
-    - cron: "0 1 * * *"
+    # Targets ~6:30 AM IST. Deliberately NOT on the hour (e.g. not "0 1 * * *")
+    # since GitHub's scheduler is most congested exactly at :00 of every hour;
+    # an off-hour minute like :47 sees meaningfully less queueing delay.
+    - cron: "47 0 * * *"
   workflow_dispatch: {}   # lets you trigger it manually from the Actions tab too
- 
+
 jobs:
   send-digest:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
- 
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
- 
+
       - name: Install dependencies
         run: pip install requests
- 
+
       - name: Run digest script
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python3 news_digest_v2.py
- 
